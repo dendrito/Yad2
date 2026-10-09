@@ -1,0 +1,73 @@
+name: Check sites from Israel (OpenVPN)
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'URLs to check (comma or space separated)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install OpenVPN
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openvpn
+
+      - name: Connect to Israel
+        env:
+          NORD_USER: ${{ secrets.NORD_USER }}
+          NORD_PASS: ${{ secrets.NORD_PASS }}
+          NORD_OVPN: ${{ secrets.NORD_OVPN }}
+        run: |
+          printf '%s' "$NORD_OVPN" > nord.ovpn
+          printf '%s\n%s\n' "$NORD_USER" "$NORD_PASS" > auth.txt
+          chmod 600 nord.ovpn auth.txt
+          sudo openvpn --config nord.ovpn --auth-user-pass auth.txt --daemon --log openvpn.log
+          for i in $(seq 1 30); do
+            grep -q "Initialization Sequence Completed" openvpn.log 2>/dev/null && break
+            sleep 2
+          done
+          rm -f auth.txt
+          country=$(curl -s --max-time 15 https://ipinfo.io/country || true)
+          echo "Exit country: $country"
+          if [ "$country" != "IL" ]; then sudo tail -20 openvpn.log; exit 1; fi
+
+      - name: Check each site (robots.txt first, then one request)
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          pip install --quiet requests
+          python3 - <<'PY'
+          import os, re, time, requests
+          from urllib.parse import urlparse
+          from urllib.robotparser import RobotFileParser
+          UA = "MyCrawler/1.0 (personal research)"
+          for url in [u for u in re.split(r"[,\s]+", os.environ["URLS"]) if u]:
+              p = urlparse(url if "://" in url else "https://" + url); url = p.geturl()
+              base = f"{p.scheme}://{p.netloc}"
+              try:
+                  r = requests.get(base + "/robots.txt", headers={"User-Agent": UA}, timeout=20)
+              except Exception as e:
+                  print(f"\n== {url}\n   unreachable: {e}"); continue
+              rp = RobotFileParser(); rp.parse(r.text.splitlines() if r.status_code == 200 else [])
+              ok = rp.can_fetch(UA, url)
+              print(f"\n== {url}\n   robots.txt {r.status_code}: {'ALLOWS' if ok else 'DISALLOWS'} crawling this URL")
+              if not ok:
+                  continue
+              time.sleep(4)
+              r = requests.get(url, headers={"User-Agent": UA, "Accept-Language": "he,en"}, timeout=30)
+              t = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I)
+              print(f"   page {r.status_code}, title: {t.group(1).strip()[:90] if t else '-'}")
+              if r.status_code in (401, 403, 429) or re.search(r"captcha|are you a robot|access denied", r.text[:20000], re.I):
+                  print("   bot wall or refusal: not usable as a source")
+          PY
+
+      - name: Disconnect
+        if: always()
+        run: sudo killall openvpn || true
