@@ -1,0 +1,31 @@
+name: Connect to Israel (NordVPN OpenVPN)
+description: Routes this job's traffic through an Israeli NordVPN server
+inputs:
+  user: { required: true }
+  pass: { required: true }
+  ovpn: { required: true }
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        NORD_USER: ${{ inputs.user }}
+        NORD_PASS: ${{ inputs.pass }}
+        NORD_OVPN: ${{ inputs.ovpn }}
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq openvpn
+        printf '%s' "$NORD_OVPN" > /tmp/nord.ovpn
+        printf '%s\n%s\n' "$NORD_USER" "$NORD_PASS" > /tmp/auth.txt
+        chmod 600 /tmp/nord.ovpn /tmp/auth.txt
+        sudo openvpn --config /tmp/nord.ovpn --auth-user-pass /tmp/auth.txt --daemon --log /tmp/openvpn.log \
+          --route 168.63.129.16 255.255.255.255 net_gateway \
+          --route 169.254.169.254 255.255.255.255 net_gateway
+        for i in $(seq 1 45); do
+          sudo grep -q "Initialization Sequence Completed" /tmp/openvpn.log && break
+          if sudo grep -qE "AUTH_FAILED|Exiting|Options error" /tmp/openvpn.log; then sudo tail -25 /tmp/openvpn.log; exit 1; fi
+          sleep 2
+        done
+        rm -f /tmp/auth.txt
+        country=$(curl -s --max-time 15 https://ipinfo.io/country || true)
+        echo "Exit country: $country"
+        [ "$country" = "IL" ] || { echo "::error::Not in Israel ($country)"; exit 1; }
