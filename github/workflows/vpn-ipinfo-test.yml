@@ -1,0 +1,64 @@
+name: VPN test (ipinfo.io)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ipinfo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Before VPN (GitHub's own location)
+        run: |
+          echo "Before connecting:"
+          curl -s --max-time 15 https://ipinfo.io/json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"  IP {d.get('ip')} · {d.get('city')}, {d.get('region')}, {d.get('country')} · {d.get('org')}\")"
+
+      - name: Install OpenVPN
+        timeout-minutes: 3
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq openvpn
+
+      - name: Connect to Israel
+        timeout-minutes: 3
+        env:
+          NORD_USER: ${{ secrets.NORD_USER }}
+          NORD_PASS: ${{ secrets.NORD_PASS }}
+          NORD_OVPN: ${{ secrets.NORD_OVPN }}
+        run: |
+          for v in NORD_USER NORD_PASS NORD_OVPN; do
+            [ -n "${!v}" ] || { echo "::error::Secret $v is missing or empty"; exit 1; }
+          done
+          printf '%s' "$NORD_OVPN" > nord.ovpn
+          printf '%s\n%s\n' "$NORD_USER" "$NORD_PASS" > auth.txt
+          chmod 600 nord.ovpn auth.txt
+          echo "Server in config: $(grep -m1 '^remote ' nord.ovpn || echo 'no remote line found')"
+          sudo openvpn --config nord.ovpn --auth-user-pass auth.txt --daemon --log /tmp/openvpn.log \
+            --route 168.63.129.16 255.255.255.255 net_gateway \
+            --route 169.254.169.254 255.255.255.255 net_gateway
+          for i in $(seq 1 45); do
+            if sudo grep -q "Initialization Sequence Completed" /tmp/openvpn.log; then echo "VPN connected after $((i*2))s"; break; fi
+            if sudo grep -qE "AUTH_FAILED|Exiting|Options error" /tmp/openvpn.log; then
+              echo "::error::OpenVPN failed:"; sudo tail -25 /tmp/openvpn.log; exit 1
+            fi
+            sleep 2
+          done
+          rm -f auth.txt
+          sudo grep -q "Initialization Sequence Completed" /tmp/openvpn.log || { echo "::error::VPN did not connect in 90s"; sudo tail -25 /tmp/openvpn.log; exit 1; }
+
+      - name: After VPN (should be Israel)
+        run: |
+          echo "After connecting:"
+          json=$(curl -s --max-time 20 https://ipinfo.io/json)
+          echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"  IP {d.get('ip')} · {d.get('city')}, {d.get('region')}, {d.get('country')} · {d.get('org')}\")"
+          country=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('country',''))")
+          if [ "$country" = "IL" ]; then
+            echo "✅ Traffic leaves from Israel"
+          else
+            echo "::error::Exit country is '$country', not IL"; exit 1
+          fi
+
+      - name: Disconnect
+        if: always()
+        run: sudo killall openvpn 2>/dev/null || true
