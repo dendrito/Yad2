@@ -33,12 +33,6 @@ jobs:
     timeout-minutes: 25
 
     steps:
-    
-      - uses: actions/checkout@v5
-      - name: Connect to Israel
-        run: bash tools/il_vpn.sh up
-        env:
-          NORDVPN_TOKEN: ${{ secrets.NORDVPN_TOKEN }}
       
       - name: Check Israel time window (07:00-23:00 IST/IDT)
         id: time_check
@@ -101,6 +95,12 @@ jobs:
           key: seen-properties-${{ github.run_id }}
           restore-keys: |
             seen-properties-
+
+      - uses: actions/checkout@v5
+      - name: Connect to Israel
+        run: bash tools/il_vpn.sh up
+        env:
+          NORDVPN_TOKEN: ${{ secrets.NORDVPN_TOKEN }}
 
       - name: Run scraper
         if: steps.time_check.outputs.should_run == 'true'
