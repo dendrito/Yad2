@@ -27,20 +27,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-build:
-    runs-on: ubuntu-latest
+
+  scrape:
+    runs-on: ubuntu-latest   # best-effort; see NOTE above (Radware often blocks this)
+    timeout-minutes: 25
+
     steps:
+    
       - uses: actions/checkout@v5
       - uses: ./.github/actions/israel-vpn          # ← add: connect to Israel
         with:
           user: ${{ secrets.NORD_USER }}
           pass: ${{ secrets.NORD_PASS }}
           ovpn: ${{ secrets.NORD_OVPN }}
-  scrape:
-    runs-on: ubuntu-latest   # best-effort; see NOTE above (Radware often blocks this)
-    timeout-minutes: 25
-
-    steps:
+      
       - name: Check Israel time window (07:00-23:00 IST/IDT)
         id: time_check
         run: |
