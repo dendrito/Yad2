@@ -145,5 +145,5 @@ jobs:
         run: rm -f config/credentials.json
         
       - name: Disconnect from Israel                # ← add: always the last step
-        if: always()
+        if: ${{ always() }}
         run: sudo killall openvpn || true
