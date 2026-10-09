@@ -40,19 +40,19 @@ jobs:
         env:
           NORDVPN_TOKEN: ${{ secrets.NORDVPN_TOKEN }}
       
-     # - name: Check Israel time window (07:00-23:00 IST/IDT)
-       # id: time_check
-        # run: |
-        #  set -euo pipefail
-        #  ISRAEL_HOUR=$(TZ='Asia/Jerusalem' date +%H)
-        #  echo "Current Israel time: $(TZ='Asia/Jerusalem' date '+%Y-%m-%d %H:%M:%S %Z')"
-        #  if [ "$ISRAEL_HOUR" -ge 7 ] && [ "$ISRAEL_HOUR" -lt 23 ]; then
-        #    echo "✅ Within operating hours"
-        #    echo "should_run=true" >> "$GITHUB_OUTPUT"
-        #  else
-        #    echo "⏸️ Outside operating hours (hour ${ISRAEL_HOUR})"
-         #   echo "should_run=false" >> "$GITHUB_OUTPUT"
-       #   fi
+      - name: Check Israel time window (07:00-23:00 IST/IDT)
+        id: time_check
+        run: |
+         set -euo pipefail
+          ISRAEL_HOUR=$(TZ='Asia/Jerusalem' date +%H)
+          echo "Current Israel time: $(TZ='Asia/Jerusalem' date '+%Y-%m-%d %H:%M:%S %Z')"
+          if [ "$ISRAEL_HOUR" -ge 1 ] && [ "$ISRAEL_HOUR" -lt 23 ]; then
+            echo "✅ Within operating hours"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+         else
+           echo "⏸️ Outside operating hours (hour ${ISRAEL_HOUR})"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout repository
         if: steps.time_check.outputs.should_run == 'true'
