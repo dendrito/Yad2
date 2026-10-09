@@ -35,11 +35,10 @@ jobs:
     steps:
     
       - uses: actions/checkout@v5
-      - uses: ./.github/actions/israel-vpn          # ← add: connect to Israel
-        with:
-          user: ${{ secrets.NORD_USER }}
-          pass: ${{ secrets.NORD_PASS }}
-          ovpn: ${{ secrets.NORD_OVPN }}
+      - name: Connect to Israel
+        run: bash tools/il_vpn.sh up
+        env:
+          NORDVPN_TOKEN: ${{ secrets.NORDVPN_TOKEN }}
       
       - name: Check Israel time window (07:00-23:00 IST/IDT)
         id: time_check
@@ -144,6 +143,6 @@ jobs:
         if: always() && steps.time_check.outputs.should_run == 'true'
         run: rm -f config/credentials.json
         
-      - name: Disconnect from Israel                # ← add: always the last step
-        if: ${{ always() }}
-        run: sudo killall openvpn || true
+      - name: Disconnect
+        if: always()
+        run: bash tools/il_vpn.sh down
