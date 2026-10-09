@@ -1,4 +1,4 @@
-beautifulsoup4==4.14.2
+beautifulsoup4>=4.12,<5
 cachetools==6.2.1
 certifi==2025.10.5
 charset-normalizer==3.4.4
