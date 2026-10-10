@@ -60,7 +60,6 @@ fi
 
 echo "VPN: retrieving NordVPN credentials"
 
-# Do not enable shell tracing here: the token is passed as a curl argument.
 credentials="$(
   curl --fail --silent --show-error \
     --connect-timeout 10 --max-time 30 \
@@ -194,7 +193,10 @@ WG
     )"
     country="$(printf '%s' "$country" | tr -d '[:space:]')"
 
-    [[ "$country" == "IL" ]] && break
+    if [[ "$country" == "IL" ]]; then
+      break
+    fi
+
     sleep 3
   done
 
