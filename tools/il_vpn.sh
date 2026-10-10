@@ -172,7 +172,7 @@ log "Verifying exit country"
 country=""
 
 for attempt in 1 2 3; do
-  country="$ (
+  country="$(
     curl --fail --silent \
       --connect-timeout 5 --max-time 15 \
       "https://ipinfo.io/country" 2>/dev/null || true
