@@ -6,9 +6,9 @@
 
 set -Eeuo pipefail
 
+SCRIPT_VERSION="il-vpn-single-server-v1"
 CONF="/etc/wireguard/nordil.conf"
-MAX_SERVERS=20
-API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bcountry_id%5D=105&filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=100"
+API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bcountry_id%5D=105&filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=1"
 
 log() {
   printf 'VPN: %s\n' "$*"
@@ -31,7 +31,10 @@ cleanup() {
     disconnect
   fi
 }
+
 trap cleanup EXIT
+
+log "Script version: $SCRIPT_VERSION"
 
 case "${1:-up}" in
   down)
@@ -41,7 +44,8 @@ case "${1:-up}" in
     log "Disconnected"
     exit 0
     ;;
-  up) ;;
+  up)
+    ;;
   *)
     echo "Usage: $0 [up|down]" >&2
     exit 2
@@ -85,28 +89,23 @@ unset credentials
 [[ -n "$key" ]] || fail "Empty NordVPN private key"
 echo "::add-mask::$key"
 
-log "Retrieving Israeli server recommendations"
+log "Retrieving Israeli server recommendation"
 
 server_json="$(
   curl --fail --silent --show-error \
     --connect-timeout 10 --max-time 30 \
     --retry 2 --retry-all-errors --retry-delay 2 \
     "$API_URL"
-)" || fail "Could not retrieve Israeli WireGuard recommendations"
+)" || fail "Could not retrieve Israeli WireGuard recommendation"
 
-run_number="${GITHUB_RUN_NUMBER:-1}"
-
-server_lines="$(
+server_info="$(
   printf '%s' "$server_json" |
-    RUN_NUMBER="$run_number" MAX_SERVERS="$MAX_SERVERS" python3 -c '
-import json, os, sys
+    python3 -c '
+import json, sys
 
 servers = json.load(sys.stdin)
-if not isinstance(servers, list):
-    raise SystemExit("Unexpected server response")
-
-usable = []
-seen = set()
+if not isinstance(servers, list) or not servers:
+    raise SystemExit("No recommended Israeli WireGuard servers returned")
 
 for server in servers:
     if not isinstance(server, dict):
@@ -114,16 +113,12 @@ for server in servers:
 
     hostname = server.get("hostname")
     endpoint = server.get("station")
-
-    if not hostname or not endpoint or hostname in seen:
-        continue
-
     technology = next(
         (t for t in server.get("technologies", [])
          if t.get("identifier") == "wireguard_udp"),
         None,
     )
-    if not technology:
+    if not hostname or not endpoint or not technology:
         continue
 
     public_key = next(
@@ -131,47 +126,31 @@ for server in servers:
          if m.get("name") == "public_key"),
         None,
     )
-    if not public_key:
-        continue
-
     values = (hostname, endpoint, public_key)
-    if any(not isinstance(v, str) or not v or
-           any(c.isspace() for c in v) for v in values):
-        continue
-
-    seen.add(hostname)
-    usable.append((hostname, endpoint, public_key))
-
-if not usable:
-    raise SystemExit("No usable Israeli WireGuard servers found")
-
-offset = (int(os.environ["RUN_NUMBER"]) - 1) % len(usable)
-usable = usable[offset:] + usable[:offset]
-usable = usable[:int(os.environ["MAX_SERVERS"])]
-
-for hostname, endpoint, public_key in usable:
-    print(f"{hostname}\t{endpoint}\t{public_key}")
+    if all(isinstance(v, str) and v and
+           not any(c.isspace() for c in v) for v in values):
+        print(*values, sep="\t")
+        break
+else:
+    raise SystemExit("No usable Israeli WireGuard server found")
 '
-)" || fail "Could not parse server recommendations"
+)" || fail "Could not parse Israeli server recommendation"
 
 unset server_json
 
-mapfile -t servers <<< "$server_lines"
-unset server_lines
+IFS=$'\t' read -r host ip pub <<< "$server_info"
+unset server_info
 
-count="${#servers[@]}"
-(( count > 0 )) || fail "No usable server candidates"
+[[ -n "$host" && -n "$ip" && -n "$pub" ]] ||
+  fail "Incomplete server configuration"
 
-log "Found $count candidates; run $run_number determines starting position"
+log "Selected recommended server: $host"
 
-for index in "${!servers[@]}"; do
-  IFS=$'\t' read -r host ip pub <<< "${servers[$index]}"
+# Remove any stale tunnel before creating a new configuration.
+disconnect
 
-  log "Attempt $((index + 1))/$count: $host"
-  disconnect
-
-  sudo install -m 600 /dev/null "$CONF"
-  sudo tee "$CONF" >/dev/null <<WG
+sudo install -m 600 /dev/null "$CONF"
+sudo tee "$CONF" >/dev/null <<WG
 [Interface]
 PrivateKey = ${key}
 Address = 10.5.0.2/32
@@ -184,39 +163,36 @@ Endpoint = ${ip}:51820
 PersistentKeepalive = 25
 WG
 
-  log "Starting WireGuard tunnel"
-  if ! sudo wg-quick up "$CONF"; then
-    log "Tunnel setup failed for $host; trying next candidate"
-    disconnect
-    continue
-  fi
+unset key
 
-  log "Verifying exit country"
-  country=""
+log "Starting WireGuard tunnel"
+sudo wg-quick up "$CONF" ||
+  fail "WireGuard could not start the selected tunnel"
 
-  for attempt in 1 2 3; do
-    country="$(
-      curl --fail --silent \
-        --connect-timeout 5 --max-time 15 \
-        "https://ipinfo.io/country" 2>/dev/null || true
-    )"
-    country="$(printf '%s' "$country" | tr -d '[:space:]')"
+log "Verifying exit country"
+country=""
 
-    [[ "$country" == "IL" ]] && break
+for attempt in 1 2 3; do
+  country="$(
+    curl --fail --silent \
+      --connect-timeout 5 --max-time 15 \
+      "https://ipinfo.io/country" 2>/dev/null || true
+  )"
+  country="$(printf '%s' "$country" | tr -d '[:space:]')"
 
-    log "Country check $attempt/3 did not confirm Israel"
-    sleep 3
-  done
+  [[ "$country" == "IL" ]] && break
 
-  if [[ "$country" == "IL" ]]; then
-    log "Connected through $host; exit country is Israel"
-    trap - EXIT
-    exit 0
-  fi
-
-  log "Country verification failed for $host: ${country:-unknown}"
-  disconnect
+  log "Country check $attempt/3 did not confirm Israel"
+  sleep 3
 done
 
-fail "All $count server candidates failed verification"
+if [[ "$country" != "IL" ]]; then
+  fail "Tunnel did not verify an Israeli exit IP (country: ${country:-unknown})"
+fi
+
+log "Connected through $host; exit country is Israel"
+
+# Keep the tunnel active for subsequent workflow steps.
+trap - EXIT
+exit 0
 ```
