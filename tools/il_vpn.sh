@@ -15,6 +15,15 @@ CONF="/etc/wireguard/nordil.conf"
 MAX_SERVERS=20
 API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bcountry_id%5D=105&filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=100"
 
+log() {
+  printf 'VPN: %s\n' "$*"
+}
+
+fail() {
+  echo "::error::$*"
+  exit 1
+}
+
 disconnect() {
   sudo wg-quick down "$CONF" >/dev/null 2>&1 || true
   sudo rm -f "$CONF"
@@ -23,22 +32,17 @@ disconnect() {
 cleanup_on_exit() {
   local status=$?
   if [[ "$status" -ne 0 ]]; then
-    echo "VPN: cleaning up after failure"
+    log "Cleaning up after failure (exit code: ${status})"
     disconnect
   fi
 }
 trap cleanup_on_exit EXIT
 
-fail() {
-  echo "::error::$*"
-  exit 1
-}
-
 if [[ "${1:-up}" == "down" ]]; then
-  echo "VPN: disconnecting"
+  log "Disconnecting"
   disconnect
   trap - EXIT
-  printf '%s\n' "Israeli VPN disconnected"
+  log "Israeli VPN disconnected"
   exit 0
 fi
 
@@ -53,12 +57,12 @@ command -v curl >/dev/null 2>&1 || fail "curl is not installed"
 command -v python3 >/dev/null 2>&1 || fail "python3 is not installed"
 
 if ! command -v wg-quick >/dev/null 2>&1; then
-  echo "VPN: installing WireGuard tools"
+  log "Installing WireGuard tools"
   sudo apt-get update -qq
   sudo apt-get install -y -qq wireguard-tools resolvconf
 fi
 
-echo "VPN: retrieving NordVPN credentials"
+log "Retrieving NordVPN credentials"
 
 credentials="$(
   curl --fail --silent --show-error \
@@ -72,7 +76,8 @@ key="$(
   printf '%s' "$credentials" |
     python3 -c '
 import json, sys
-print(json.load(sys.stdin)["nordlynx_private_key"])
+data = json.load(sys.stdin)
+print(data["nordlynx_private_key"])
 '
 )" || fail "Could not parse NordVPN credentials"
 
@@ -80,7 +85,7 @@ unset credentials
 [[ -n "$key" ]] || fail "NordVPN returned an empty private key"
 echo "::add-mask::$key"
 
-echo "VPN: retrieving Israeli WireGuard server recommendations"
+log "Retrieving Israeli WireGuard server recommendations"
 
 server_json="$(
   curl --fail --silent --show-error \
@@ -89,7 +94,7 @@ server_json="$(
     "$API_URL"
 )" || fail "Could not retrieve Israeli WireGuard recommendations"
 
-echo "VPN: parsing and deduplicating server recommendations"
+log "Parsing and deduplicating server recommendations"
 
 run_number="${GITHUB_RUN_NUMBER:-1}"
 
@@ -153,15 +158,16 @@ unset server_lines
 server_count="${#servers[@]}"
 [[ "$server_count" -gt 0 ]] || fail "No usable Israeli servers found"
 
-echo "VPN: found ${server_count} distinct usable server recommendations"
+log "Found ${server_count} distinct usable server recommendations"
 
 for index in "${!servers[@]}"; do
   IFS=$'\t' read -r host ip pub <<< "${servers[$index]}"
 
-  echo "VPN: attempt $((index + 1))/${server_count} using ${host}"
+  log "Attempt $((index + 1))/${server_count}: ${host}"
 
   disconnect
 
+  log "Writing WireGuard configuration"
   sudo install -m 600 /dev/null "$CONF"
   sudo tee "$CONF" >/dev/null <<WG
 [Interface]
@@ -176,18 +182,20 @@ Endpoint = ${ip}:51820
 PersistentKeepalive = 25
 WG
 
-  if ! sudo wg-quick up "$CONF" >/dev/null; then
-    echo "VPN: tunnel setup failed for ${host}; trying the next server"
+  log "Starting WireGuard tunnel for ${host}"
+  if ! sudo wg-quick up "$CONF"; then
+    log "Tunnel setup failed for ${host}; trying next server"
     disconnect
     continue
   fi
 
-  echo "VPN: checking exit country for ${host}"
+  log "Tunnel started; checking public exit country"
 
   country=""
   for check in 1 2 3; do
+    log "Exit-country check ${check}/3"
     country="$(
-      curl --fail --silent \
+      curl --fail --silent --show-error \
         --connect-timeout 5 --max-time 15 \
         "https://ipinfo.io/country" 2>/dev/null || true
     )"
@@ -201,14 +209,14 @@ WG
   done
 
   if [[ "$country" == "IL" ]]; then
-    echo "VPN: connected through ${host}; exit country verified as Israel"
+    log "Connected through ${host}; exit country verified as Israel"
     trap - EXIT
     exit 0
   fi
 
-  echo "VPN: exit verification failed for ${host} (country: ${country:-unknown})"
+  log "Exit verification failed for ${host} (country: ${country:-unknown})"
   disconnect
 done
 
-fail "All ${server_count} distinct server attempts failed; no verified Israeli connection"
+fail "All ${server_count} server attempts failed; no verified Israeli connection"
 ```
