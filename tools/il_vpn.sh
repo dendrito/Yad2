@@ -4,14 +4,13 @@
 # over NordLynx (WireGuard), or disconnect.
 #
 # Usage:
-#   tools/il_vpn.sh up
-#   tools/il_vpn.sh down
+#   bash tools/il_vpn.sh up
+#   bash tools/il_vpn.sh down
 #
 # Required repository secret: NORDVPN_TOKEN
-# GITHUB_RUN_NUMBER rotates the starting server between workflow runs.
+# GITHUB_RUN_NUMBER rotates the starting server between runs.
 #
-# The crawler must continue to respect robots.txt, pacing requirements,
-# and stop when it encounters login or bot challenges.
+# The crawler must respect robots.txt, pacing, and bot/login restrictions.
 
 set -Eeuo pipefail
 
@@ -21,11 +20,11 @@ MAX_SERVERS=20
 API_URL="https://api.nordvpn.com/v1/servers/recommendations?filters%5Bcountry_id%5D=105&filters%5Bservers_technologies%5D%5Bidentifier%5D=wireguard_udp&limit=100"
 
 log() {
-  printf 'VPN: %s\n' "$*"
+  printf '%s\n' "VPN: $*"
 }
 
 fail() {
-  echo "::error::$*"
+  printf '::error::%s\n' "$*" >&2
   exit 1
 }
 
@@ -44,20 +43,23 @@ cleanup_on_failure() {
 
 trap cleanup_on_failure EXIT
 
-if [[ "${1:-up}" == "down" ]]; then
-  log "Disconnecting"
-  disconnect
-  trap - EXIT
-  log "Israeli VPN disconnected"
-  exit 0
-fi
+case "${1:-up}" in
+  down)
+    log "Disconnecting"
+    disconnect
+    trap - EXIT
+    log "Israeli VPN disconnected"
+    exit 0
+    ;;
+  up)
+    ;;
+  *)
+    echo "Usage: $0 [up|down]" >&2
+    exit 2
+    ;;
+esac
 
-if [[ "${1:-up}" != "up" ]]; then
-  echo "Usage: $0 [up|down]" >&2
-  exit 2
-fi
-
-: "${NORDVPN_TOKEN:?Add the NORDVPN_TOKEN repository secret (Nord Account → NordVPN → Manual setup → generate an access token)}"
+: "${NORDVPN_TOKEN:?Add the NORDVPN_TOKEN repository secret}"
 
 command -v curl >/dev/null 2>&1 || fail "curl is not installed"
 command -v python3 >/dev/null 2>&1 || fail "python3 is not installed"
@@ -68,7 +70,6 @@ if ! command -v wg-quick >/dev/null 2>&1; then
   sudo apt-get install -y -qq wireguard-tools resolvconf
 fi
 
-# Retrieve the NordLynx private key.
 log "Retrieving NordVPN credentials"
 
 credentials="$(
@@ -80,7 +81,7 @@ credentials="$(
     --retry-delay 2 \
     -u "token:${NORDVPN_TOKEN}" \
     "https://api.nordvpn.com/v1/users/services/credentials"
-)" || fail "NordVPN refused the request; check the access token and API response"
+)" || fail "Could not retrieve NordVPN credentials"
 
 key="$(
   printf '%s' "$credentials" |
@@ -103,8 +104,7 @@ unset credentials
 [[ -n "$key" ]] || fail "NordVPN returned an empty private key"
 echo "::add-mask::$key"
 
-# Retrieve Israeli WireGuard server recommendations.
-log "Retrieving Israeli WireGuard server recommendations"
+log "Retrieving Israeli WireGuard recommendations"
 
 server_json="$(
   curl --fail --silent --show-error \
@@ -116,11 +116,9 @@ server_json="$(
     "$API_URL"
 )" || fail "Could not retrieve Israeli WireGuard recommendations"
 
-# Deduplicate usable servers, rotate the starting point between workflow runs,
-# and retain at most 20 candidates.
-log "Parsing, deduplicating, and rotating server candidates"
-
 run_number="${GITHUB_RUN_NUMBER:-1}"
+
+log "Parsing recommendations and rotating the starting server"
 
 server_lines="$(
   printf '%s' "$server_json" |
@@ -173,7 +171,6 @@ for server in servers:
     if not public_key:
         continue
 
-    # Reject malformed values that could corrupt the WireGuard configuration.
     values = (hostname, endpoint, public_key)
     if any(
         not isinstance(value, str)
@@ -189,11 +186,11 @@ for server in servers:
 if not unique:
     raise SystemExit("No usable Israeli WireGuard servers were returned")
 
-# Rotate the starting position for each workflow run.
+# Rotate the starting position on each workflow run.
 offset = (int(os.environ.get("RUN_NUMBER", "1")) - 1) % len(unique)
 unique = unique[offset:] + unique[:offset]
 
-# Retain no more than 20 distinct candidates.
+# Keep no more than 20 distinct servers.
 unique = unique[:int(os.environ["MAX_SERVERS"])]
 
 for hostname, endpoint, public_key in unique:
@@ -209,9 +206,8 @@ unset server_lines
 server_count="${#servers[@]}"
 (( server_count > 0 )) || fail "No usable Israeli servers found"
 
-log "Found ${server_count} distinct candidates; starting position rotates by workflow run number ${run_number}"
+log "Found ${server_count} candidates; run number ${run_number} determines rotation"
 
-# Attempt candidates in the rotated order.
 for index in "${!servers[@]}"; do
   IFS=$'\t' read -r host ip pub <<< "${servers[$index]}"
 
@@ -220,6 +216,7 @@ for index in "${!servers[@]}"; do
   disconnect
 
   sudo install -m 600 /dev/null "$CONF"
+
   sudo tee "$CONF" >/dev/null <<WG
 [Interface]
 PrivateKey = ${key}
@@ -244,6 +241,7 @@ WG
   log "Checking public exit country"
 
   country=""
+
   for attempt in 1 2 3; do
     country="$(
       curl --fail --silent \
@@ -264,14 +262,14 @@ WG
 
   if [[ "$country" == "IL" ]]; then
     log "Connected through ${host}; exit country verified as Israel"
-    # Keep the tunnel active for subsequent workflow steps.
+    # Keep the tunnel up for the remaining workflow steps.
     trap - EXIT
     exit 0
   fi
 
-  log "Exit-country verification failed for ${host} (country: ${country:-unknown})"
+  log "Exit verification failed for ${host} (country: ${country:-unknown})"
   disconnect
 done
 
-fail "All ${server_count} server candidates failed; no verified Israeli connection"
+fail "All ${server_count} candidate servers failed verification"
 ```
