@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 # Israeli NordVPN WireGuard connection for GitHub Actions.
 # Usage: bash tools/il_vpn.sh up
@@ -173,7 +172,7 @@ log "Verifying exit country"
 country=""
 
 for attempt in 1 2 3; do
-  country="$(
+  country="$ (
     curl --fail --silent \
       --connect-timeout 5 --max-time 15 \
       "https://ipinfo.io/country" 2>/dev/null || true
@@ -195,4 +194,3 @@ log "Connected through $host; exit country is Israel"
 # Keep the tunnel active for subsequent workflow steps.
 trap - EXIT
 exit 0
-```
