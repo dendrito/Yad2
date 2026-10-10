@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yad2.scraper.docker</string>
+  
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd /Users/USERNAME/path/to/Yad2 && bash scripts/run-scraper-vpn.sh</string>
+  </array>
+  
+  <key>WorkingDirectory</key>
+  <string>/Users/USERNAME/path/to/Yad2</string>
+  
+  <!-- Run every 1 hour (3600 seconds) -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  
+  <!-- Log output and errors -->
+  <key>StandardOutPath</key>
+  <string>/tmp/yad2-scraper.log</string>
+  
+  <key>StandardErrorPath</key>
+  <string>/tmp/yad2-scraper.err</string>
+  
+  <!-- Don't keep running multiple copies -->
+  <key>KeepAlive</key>
+  <false/>
+  
+  <!-- Run immediately on login -->
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
