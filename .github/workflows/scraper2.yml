@@ -95,7 +95,15 @@ jobs:
           key: seen-properties-${{ github.run_id }}
           restore-keys: |
             seen-properties-
-
+      - name: Verify VPN script being executed
+        run: |
+          echo "=== Commit ==="
+          git rev-parse HEAD
+          echo "=== Script version and suspicious lines ==="
+          grep -nE 'SCRIPT_VERSION|VPN:|log\(\)' tools/il_vpn.sh || true
+          echo "=== Lines 185-205 ==="
+          nl -ba tools/il_vpn.sh | sed -n '185,205p'
+          
       - uses: actions/checkout@v5
       - name: Connect to Israel
         run: bash tools/il_vpn.sh up
